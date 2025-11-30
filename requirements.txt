@@ -1,0 +1,17 @@
+langchain>=0.1.0
+langchain-core
+langchain-community
+langchain-openai
+langchain-experimental
+langgraph
+streamlit
+duckduckgo-search
+python-dotenv
+pandas
+openpyxl
+matplotlib
+qrcode
+sqlparse
+requests
+Pillow
+markdown
