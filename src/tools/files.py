@@ -1,4 +1,5 @@
 import os
+import re
 from langchain_core.tools import tool
 from langchain_experimental.utilities import PythonREPL
 
@@ -26,13 +27,9 @@ def python_interpreter(code: str) -> str:
 
 @tool
 def list_uploaded_files() -> str:
-    """Lists all files currently uploaded by the user."""
-    upload_dir = "uploads"
-    if not os.path.exists(upload_dir):
+    """Lists files uploaded in the current session only."""
+    allowed = os.environ.get("CURRENT_SESSION_UPLOADS", "")
+    names = [x.strip() for x in re.split(r"[;,]", allowed) if x.strip()]
+    if not names:
         return "No files uploaded yet."
-    
-    files = os.listdir(upload_dir)
-    if not files:
-        return "No files uploaded yet."
-    
-    return "Uploaded files:\n" + "\n".join(files)
+    return "Uploaded files (current session):\n" + "\n".join(names)

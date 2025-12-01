@@ -4,6 +4,8 @@ import re
 import json
 import base64
 import urllib.parse
+import difflib
+import html
 from datetime import datetime
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, AIMessageChunk
 from src.agent.react_agent import get_graph
@@ -29,6 +31,7 @@ def extract_file_artifact(text):
         return (ext, b64, fname)
     return None
 
+
 def render_ui():
     st.set_page_config(page_title="AI 智能助手", page_icon="🛠️")
 
@@ -36,7 +39,7 @@ def render_ui():
 
     st.divider()
 
-    tabs = st.tabs(["JSON/SQL 工具", "Base64", "URL 编解码", "正则提取", "文本处理", "日期格式转换"])
+    tabs = st.tabs(["JSON/SQL 工具", "Base64", "URL 编解码", "文本比对", "JSONPath 查询", "日期格式转换"])
 
     with tabs[0]:
         if "jsonsql_output" not in st.session_state:
@@ -126,82 +129,279 @@ def render_ui():
             st.text_area("结果", height=200, key="url_output")
 
     with tabs[3]:
-        if "regex_output" not in st.session_state:
-            st.session_state.regex_output = ""
-        c1, c2, c3 = st.columns([4, 1, 4])
+        def _normalize_lines(text, ignore_ws, ignore_case):
+            lines = (text or "").splitlines()
+            out = []
+            for s in lines:
+                t = s
+                if ignore_ws:
+                    t = " ".join(t.split())
+                if ignore_case:
+                    t = t.lower()
+                out.append(t)
+            return out
+
+        def _render_hunk(a_lines, b_lines, op, ctx=3):
+            tag, i1, i2, j1, j2 = op
+            a_start = max(0, i1 - ctx)
+            a_end = min(len(a_lines), i2 + ctx)
+            b_start = max(0, j1 - ctx)
+            b_end = min(len(b_lines), j2 + ctx)
+
+            def paint(line, kind):
+                esc = html.escape(line)
+                if kind == "equal":
+                    return f"<span>{esc}</span>"
+                if kind == "delete":
+                    return f"<span style='background:#ffecec;'>{esc}</span>"
+                if kind == "insert":
+                    return f"<span style='background:#eaffea;'>{esc}</span>"
+                if kind == "replace":
+                    return f"<span style='background:#fff8e1;'>{esc}</span>"
+                return f"<span>{esc}</span>"
+
+            a_html_lines = []
+            for idx in range(a_start, a_end):
+                kind = "equal"
+                if i1 <= idx < i2:
+                    kind = "delete" if tag == "delete" else ("replace" if tag == "replace" else "equal")
+                ln = paint(a_lines[idx], kind)
+                a_html_lines.append(f"<div><span style='color:#999;'>L{idx+1}:</span> {ln}</div>")
+
+            b_html_lines = []
+            for idx in range(b_start, b_end):
+                kind = "equal"
+                if j1 <= idx < j2:
+                    kind = "insert" if tag == "insert" else ("replace" if tag == "replace" else "equal")
+                ln = paint(b_lines[idx], kind)
+                b_html_lines.append(f"<div><span style='color:#999;'>L{idx+1}:</span> {ln}</div>")
+
+            left = "".join(a_html_lines)
+            right = "".join(b_html_lines)
+            return f"<div style='display:flex;gap:16px;'><div style='flex:1;border:1px solid #eee;padding:8px;'><div style='font-weight:600;margin-bottom:6px;'>文本A</div><pre style='margin:0;'>{left}</pre></div><div style='flex:1;border:1px solid #eee;padding:8px;'><div style='font-weight:600;margin-bottom:6px;'>文本B</div><pre style='margin:0;'>{right}</pre></div></div>"
+
+        if "diff_state" not in st.session_state:
+            st.session_state.diff_state = {
+                "ops": [],
+                "cur": 0,
+                "count": 0,
+                "ignore_ws": True,
+                "ignore_case": False,
+                "a_lines": [],
+                "b_lines": []
+            }
+
+        c1, c2 = st.columns([3, 2])
         with c1:
-            regex_text = st.text_area("输入文本", height=200, key="regex_text")
-            regex_pat = st.text_input("正则表达式", key="regex_pat")
-            flag_i = st.checkbox("IGNORECASE", key="regex_i")
-            flag_m = st.checkbox("MULTILINE", key="regex_m")
-            flag_s = st.checkbox("DOTALL", key="regex_s")
+            diff_a = st.text_area("文本A", height=240, key="diff_a")
         with c2:
-            st.write("")
-            st.write("")
-            st.write("")
-            if st.button("提取"):
+            diff_b = st.text_area("文本B", height=240, key="diff_b")
+
+        opt1, opt2, opt3 = st.columns([1,1,2])
+        with opt1:
+            st.session_state.diff_state["ignore_ws"] = st.checkbox("忽略空白", value=st.session_state.diff_state["ignore_ws"]) 
+        with opt2:
+            st.session_state.diff_state["ignore_case"] = st.checkbox("忽略大小写", value=st.session_state.diff_state["ignore_case"]) 
+        with opt3:
+            if st.button("计算差异"):
                 try:
-                    flags = 0
-                    if flag_i:
-                        flags |= re.IGNORECASE
-                    if flag_m:
-                        flags |= re.MULTILINE
-                    if flag_s:
-                        flags |= re.DOTALL
-                    if regex_pat:
-                        matches = re.findall(regex_pat, regex_text or "", flags)
-                        lines = []
-                        for m in matches:
-                            if isinstance(m, tuple):
-                                lines.append("\t".join(str(x) for x in m))
-                            else:
-                                lines.append(str(m))
-                        st.session_state.regex_output = "\n".join(lines)
-                    else:
-                        st.session_state.regex_output = ""
+                    a_norm = _normalize_lines(diff_a, st.session_state.diff_state["ignore_ws"], st.session_state.diff_state["ignore_case"]) 
+                    b_norm = _normalize_lines(diff_b, st.session_state.diff_state["ignore_ws"], st.session_state.diff_state["ignore_case"]) 
+                    sm = difflib.SequenceMatcher(None, a_norm, b_norm, autojunk=False)
+                    ops = sm.get_opcodes()
+                    non_equal_indices = [i for i,(t,_,_,_,_) in enumerate(ops) if t != "equal"]
+                    st.session_state.diff_state["ops"] = ops
+                    st.session_state.diff_state["count"] = len(non_equal_indices)
+                    st.session_state.diff_state["cur"] = (non_equal_indices[0] if non_equal_indices else 0)
+                    st.session_state.diff_state["a_lines"] = (diff_a or "").splitlines()
+                    st.session_state.diff_state["b_lines"] = (diff_b or "").splitlines()
                 except Exception as e:
-                    st.session_state.regex_output = f"Error: {str(e)}"
-                st.rerun()
-        with c3:
-            st.text_area("结果", height=200, key="regex_output")
+                    st.warning(f"计算差异失败: {str(e)}")
+
+        nav1, nav2, nav3 = st.columns([1,1,3])
+        with nav1:
+            if st.button("◀ 上一个差异"):
+                cur = st.session_state.diff_state["cur"]
+                ops = st.session_state.diff_state["ops"]
+                prev = cur
+                for i in range(cur-1, -1, -1):
+                    if ops[i][0] != "equal":
+                        prev = i
+                        break
+                st.session_state.diff_state["cur"] = prev
+        with nav2:
+            if st.button("下一个差异 ▶"):
+                cur = st.session_state.diff_state["cur"]
+                ops = st.session_state.diff_state["ops"]
+                nxt = cur
+                for i in range(cur+1, len(ops)):
+                    if ops[i][0] != "equal":
+                        nxt = i
+                        break
+                st.session_state.diff_state["cur"] = nxt
+        with nav3:
+            cnt = st.session_state.diff_state.get("count", 0)
+            ops = st.session_state.diff_state.get("ops", [])
+            cur = st.session_state.diff_state.get("cur", 0)
+            if cnt == 0 and ops:
+                st.info("两侧文本完全一致")
+            elif ops:
+                tag,i1,i2,j1,j2 = ops[cur]
+                st.info(f"双向对比：共 {cnt} 处不同，当前第 {min([i for i,(t,_,_,_,_) in enumerate(ops) if t!='equal'].index(cur)+1 if cnt else 0, cnt)} 个 (A行 {i1+1}-{i2} / B行 {j1+1}-{j2})")
+
+        ops = st.session_state.diff_state.get("ops", [])
+        if ops:
+            cur = st.session_state.diff_state["cur"]
+            a_lines = st.session_state.diff_state["a_lines"]
+            b_lines = st.session_state.diff_state["b_lines"]
+            html_view = _render_hunk(a_lines, b_lines, ops[cur])
+            st.markdown(html_view, unsafe_allow_html=True)
 
     with tabs[4]:
-        if "textproc_output" not in st.session_state:
-            st.session_state.textproc_output = ""
+        if "jp_output" not in st.session_state:
+            st.session_state.jp_output = ""
+        def _jp_tokens(path: str):
+            tokens = []
+            i = 0
+            n = len(path or "")
+            while i < n:
+                if path[i] == '$':
+                    i += 1
+                    continue
+                if i + 1 < n and path[i:i+2] == '..':
+                    i += 2
+                    j = i
+                    while j < n and path[j] not in '.[':
+                        j += 1
+                    name = path[i:j]
+                    tokens.append(("rec", name))
+                    i = j
+                    continue
+                if path[i] == '.':
+                    i += 1
+                    j = i
+                    while j < n and path[j] not in '.[':
+                        j += 1
+                    name = path[i:j]
+                    if name == '*':
+                        tokens.append(("wild", None))
+                    elif name:
+                        tokens.append(("child", name))
+                    i = j
+                    continue
+                if path[i] == '[':
+                    j = i + 1
+                    while j < n and path[j] != ']':
+                        j += 1
+                    content = path[i+1:j]
+                    if content == '*':
+                        tokens.append(("wild", None))
+                    elif content.startswith("'") or content.startswith('"'):
+                        name = content.strip("'\"")
+                        tokens.append(("child", name))
+                    elif ':' in content:
+                        parts = content.split(':')
+                        start = int(parts[0]) if parts[0] else None
+                        end = int(parts[1]) if parts[1] else None
+                        tokens.append(("slice", (start, end)))
+                    else:
+                        try:
+                            idx = int(content)
+                            tokens.append(("index", idx))
+                        except Exception:
+                            pass
+                    i = j + 1
+                    continue
+                i += 1
+            return tokens
+        def _descend_collect(node, name):
+            res = []
+            stack = [node]
+            while stack:
+                cur = stack.pop()
+                if isinstance(cur, dict):
+                    if name in cur:
+                        res.append(cur[name])
+                    stack.extend(cur.values())
+                elif isinstance(cur, list):
+                    stack.extend(cur)
+            return res
+        def jsonpath_query(json_text: str, path: str):
+            try:
+                obj = json.loads(json_text)
+            except Exception as e:
+                return f"JSON Error: {str(e)}"
+            nodes = [obj]
+            for t in _jp_tokens(path):
+                kind = t[0]
+                arg = t[1] if len(t) > 1 else None
+                next_nodes = []
+                if kind == "child":
+                    for nd in nodes:
+                        if isinstance(nd, dict) and arg in nd:
+                            next_nodes.append(nd[arg])
+                elif kind == "wild":
+                    for nd in nodes:
+                        if isinstance(nd, dict):
+                            next_nodes.extend(list(nd.values()))
+                        elif isinstance(nd, list):
+                            next_nodes.extend(nd)
+                elif kind == "rec":
+                    for nd in nodes:
+                        next_nodes.extend(_descend_collect(nd, arg))
+                elif kind == "index":
+                    for nd in nodes:
+                        if isinstance(nd, list) and -len(nd) <= arg < len(nd):
+                            next_nodes.append(nd[arg])
+                elif kind == "slice":
+                    start, end = arg
+                    for nd in nodes:
+                        if isinstance(nd, list):
+                            next_nodes.extend(nd[slice(start, end)])
+                nodes = next_nodes
+            out_lines = []
+            for v in nodes:
+                if isinstance(v, (dict, list)):
+                    out_lines.append(json.dumps(v, ensure_ascii=False, indent=2))
+                else:
+                    out_lines.append(str(v))
+            return "\n".join(out_lines)
         c1, c2, c3 = st.columns([4, 1, 4])
         with c1:
-            tp_input = st.text_area("输入文本", height=200, key="tp_input")
-            tp_action = st.selectbox("操作", ["去重", "去重并排序", "排序", "去空行", "去首尾空格", "转大写", "转小写", "Title Case"], key="tp_action")
+            if "jp_json" not in st.session_state:
+                st.session_state.jp_json = """{ 
+   \"store\": { 
+     \"book\": [ 
+       { 
+         \"category\": \"reference\", 
+         \"author\": \"Nigel Rees\", 
+         \"title\": \"Sayings of the Century\", 
+         \"price\": 8.95 
+       }, 
+       { 
+         \"category\": \"fiction\", 
+         \"author\": \"Evelyn Waugh\", 
+         \"title\": \"Sword of Honour\", 
+         \"price\": 12.99 
+       } 
+     ], 
+     \"bicycle\": { 
+       \"color\": \"red\", 
+       \"price\": 19.95 
+     } 
+   } 
+ }"""
+            jp_json = st.text_area("输入JSON", height=240, key="jp_json")
+            jp_expr = st.text_input("JSONPath 表达式", value="$.store.book[*].author", key="jp_expr")
         with c2:
             st.write("")
             st.write("")
             st.write("")
-            if st.button("处理"):
-                try:
-                    lines = (tp_input or "").splitlines()
-                    if tp_action == "去重":
-                        st.session_state.textproc_output = "\n".join(list(dict.fromkeys(lines)))
-                    elif tp_action == "去重并排序":
-                        st.session_state.textproc_output = "\n".join(sorted(set(lines)))
-                    elif tp_action == "排序":
-                        st.session_state.textproc_output = "\n".join(sorted(lines))
-                    elif tp_action == "去空行":
-                        st.session_state.textproc_output = "\n".join([x for x in lines if x.strip()])
-                    elif tp_action == "去首尾空格":
-                        st.session_state.textproc_output = "\n".join([x.strip() for x in lines])
-                    elif tp_action == "转大写":
-                        st.session_state.textproc_output = "\n".join([x.upper() for x in lines])
-                    elif tp_action == "转小写":
-                        st.session_state.textproc_output = "\n".join([x.lower() for x in lines])
-                    elif tp_action == "Title Case":
-                        st.session_state.textproc_output = "\n".join([x.title() for x in lines])
-                    else:
-                        st.session_state.textproc_output = ""
-                except Exception as e:
-                    st.session_state.textproc_output = f"Error: {str(e)}"
+            if st.button("查询"):
+                st.session_state.jp_output = jsonpath_query(jp_json, jp_expr)
                 st.rerun()
         with c3:
-            st.text_area("结果", height=200, key="textproc_output")
+            st.text_area("结果", height=240, key="jp_output")
 
     with tabs[5]:
         if "date_output" not in st.session_state:
@@ -238,11 +438,14 @@ def render_ui():
     # Sidebar for API Key configuration
     with st.sidebar:
         st.header("配置")
-        api_key = st.text_input("DeepSeek API Key", type="password")
-        if api_key:
-            os.environ["DEEPSEEK_API_KEY"] = api_key
+        ds_key = st.text_input("DeepSeek API Key", type="password")
+        if ds_key:
+            os.environ["DEEPSEEK_API_KEY"] = ds_key
+        zhipu_key = st.text_input("Zhipu API Key", type="password")
+        if zhipu_key:
+            os.environ["ZHIPU_API_KEY"] = zhipu_key
         
-        st.info("如果没有 API Key，请确保 .env 文件中已配置 DEEPSEEK_API_KEY。")
+        st.info("可使用 DeepSeek / Zhipu；至少配置一个 API Key。")
         
         st.divider()
         st.header("文件上传")
@@ -257,11 +460,15 @@ def render_ui():
             if not os.path.exists(upload_dir):
                 os.makedirs(upload_dir)
                 
+            current_names = []
             for uploaded_file in uploaded_files:
                 file_path = os.path.join(upload_dir, uploaded_file.name)
                 with open(file_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
-            st.success(f"已上传 {len(uploaded_files)} 个文件到 {upload_dir}/")
+                current_names.append(uploaded_file.name)
+            st.session_state["uploaded_current"] = current_names
+            os.environ["CURRENT_SESSION_UPLOADS"] = ";".join(current_names)
+            st.success(f"已上传 {len(uploaded_files)} 个文件到 {upload_dir}/：{', '.join(current_names)}")
 
     # Initialize session state for messages
     if "messages" not in st.session_state:
@@ -296,7 +503,7 @@ def render_ui():
     user_input = st.chat_input("请输入您的任务 (例如: 生成一个内容为 'HelloWorld' 的二维码)")
 
     if user_input:
-        if not os.environ.get("DEEPSEEK_API_KEY") and not os.environ.get("OPENAI_API_KEY"):
+        if not os.environ.get("DEEPSEEK_API_KEY") and not os.environ.get("ZHIPU_API_KEY"):
             st.error("请先配置 API Key！")
             st.stop()
 
@@ -318,12 +525,10 @@ def render_ui():
             # To handle non-streaming updates with waiting effect
             try:
                 # Check for uploaded files to provide context
-                upload_dir = "uploads"
                 uploaded_context = ""
-                if os.path.exists(upload_dir):
-                    files = os.listdir(upload_dir)
-                    if files:
-                        uploaded_context = f"\n\n[System Hint] Current uploaded files available in 'uploads/' directory: {', '.join(files)}. Use '*_upload' tools to process them."
+                files = st.session_state.get("uploaded_current", [])
+                if files:
+                    uploaded_context = f"\n\n[System Hint] Current uploaded files for this session: {', '.join(files)}. Only operate on these; do not read historical files."
                 
                 inputs = {"messages": [HumanMessage(content=user_input + uploaded_context)]}
                 

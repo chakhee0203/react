@@ -4,6 +4,7 @@ from typing import Literal
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageStat
 from langchain_core.tools import tool
 import os
+import re
 
 def _decode_image(b64: str) -> Image.Image:
     return Image.open(io.BytesIO(base64.b64decode(b64)))
@@ -137,6 +138,8 @@ def image_remove_watermark_base64(image_base64: str, x: int, y: int, width: int,
 def image_upload_to_base64(filename: str) -> str:
     """Read uploaded image from 'uploads/' and return as base64 (PNG)."""
     try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
         path = os.path.join("uploads", filename)
         with open(path, "rb") as f:
             data = f.read()
@@ -149,11 +152,18 @@ def image_upload_to_base64(filename: str) -> str:
         return f"Image loaded. [IMAGE:{mime}:{b64}]"
     except Exception as e:
         return f"Error reading uploaded image: {str(e)}"
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
 
 @tool
 def image_crop_upload(filename: str, x: int, y: int, width: int, height: int) -> str:
     """Crop an uploaded image to a rectangle and return base64 (WEBP)."""
     try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
         path = os.path.join("uploads", filename)
         img = Image.open(path)
         box = (x, y, x + width, y + height)
@@ -162,11 +172,18 @@ def image_crop_upload(filename: str, x: int, y: int, width: int, height: int) ->
         return f"Image cropped. [IMAGE:webp:{b64}]"
     except Exception as e:
         return f"Error cropping image: {str(e)}"
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
 
 @tool
 def image_compress_upload(filename: str, quality: int = 75, format: Literal["JPEG", "WEBP"] = "JPEG") -> str:
     """Compress an uploaded image by re-encoding with given quality; return base64."""
     try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
         path = os.path.join("uploads", filename)
         img = Image.open(path).convert("RGB")
         buf = io.BytesIO()
@@ -176,11 +193,18 @@ def image_compress_upload(filename: str, quality: int = 75, format: Literal["JPE
         return f"Image compressed. [IMAGE:{mime}:{b64}]"
     except Exception as e:
         return f"Error compressing image: {str(e)}"
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
 
 @tool
 def image_rotate_upload(filename: str, angle: float, expand: bool = True) -> str:
     """Rotate an uploaded image by angle degrees; return base64 (WEBP)."""
     try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
         path = os.path.join("uploads", filename)
         img = Image.open(path)
         rotated = img.rotate(angle, expand=expand)
@@ -188,11 +212,18 @@ def image_rotate_upload(filename: str, angle: float, expand: bool = True) -> str
         return f"Image rotated. [IMAGE:webp:{b64}]"
     except Exception as e:
         return f"Error rotating image: {str(e)}"
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
 
 @tool
 def image_add_text_watermark_upload(filename: str, text: str, x: int = 10, y: int = 10, opacity: float = 0.3, font_size: int = 24) -> str:
     """Add semi-transparent text watermark to an uploaded image; return base64 (WEBP)."""
     try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
         path = os.path.join("uploads", filename)
         img = Image.open(path).convert("RGBA")
         txt_layer = Image.new("RGBA", img.size, (255, 255, 255, 0))
@@ -235,11 +266,18 @@ def image_add_text_watermark_upload(filename: str, text: str, x: int = 10, y: in
         return f"Text watermark added. [IMAGE:webp:{b64}]"
     except Exception as e:
         return f"Error adding text watermark: {str(e)}"
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
 
 @tool
 def image_add_image_watermark_upload(filename: str, watermark_filename: str, x: int = 10, y: int = 10, opacity: float = 0.3, scale: float = 1.0) -> str:
     """Overlay an uploaded image watermark on another uploaded image; return base64 (WEBP)."""
     try:
+        if not (_allowed(filename) and _allowed(watermark_filename)):
+            return "Error: File not allowed (not in current session uploads)"
         base_path = os.path.join("uploads", filename)
         wm_path = os.path.join("uploads", watermark_filename)
         base = Image.open(base_path).convert("RGBA")
@@ -256,6 +294,12 @@ def image_add_image_watermark_upload(filename: str, watermark_filename: str, x: 
         return f"Image watermark added. [IMAGE:webp:{b64}]"
     except Exception as e:
         return f"Error adding image watermark: {str(e)}"
+    finally:
+        for p in (base_path, wm_path):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
 
 @tool
 def image_remove_watermark_upload(filename: str, x: int, y: int, width: int, height: int, method: Literal["blur", "pixelate"] = "blur") -> str:
@@ -275,3 +319,7 @@ def image_remove_watermark_upload(filename: str, x: int, y: int, width: int, hei
         return f"Watermark removed. [IMAGE:webp:{b64}]"
     except Exception as e:
         return f"Error removing watermark: {str(e)}"
+def _allowed(filename: str) -> bool:
+    allowed = os.environ.get("CURRENT_SESSION_UPLOADS", "")
+    names = [x.strip() for x in re.split(r"[;,]", allowed) if x.strip()]
+    return filename in names
