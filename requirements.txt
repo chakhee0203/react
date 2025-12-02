@@ -15,3 +15,8 @@ sqlparse
 requests
 Pillow
 markdown
+seaborn
+python-docx
+reportlab
+pdf2docx
+PyPDF2
