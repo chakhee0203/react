@@ -1,7 +1,14 @@
 from .general import web_search, calculator, current_time
 from .files import python_interpreter, list_uploaded_files
 from .dev import json_formatter, hash_generator, encoding_tool, timestamp_converter, qrcode_generator, sql_formatter
-from .office import excel_to_csv_from_upload, csv_to_excel_from_upload, markdown_to_html
+from .office import (
+    excel_to_csv_from_upload,
+    csv_to_excel_from_upload,
+    markdown_to_html,
+    word_to_pdf_from_upload,
+    pdf_to_word_from_upload,
+    excel_to_pdf_from_upload,
+)
 from .image import (
     image_resize_base64,
     image_convert_base64,
@@ -18,6 +25,7 @@ from .image import (
     image_add_text_watermark_upload,
     image_add_image_watermark_upload,
     image_remove_watermark_upload,
+    image_auto_remove_watermark_upload,
 )
 
 def get_tools():
@@ -36,6 +44,9 @@ def get_tools():
         excel_to_csv_from_upload,
         csv_to_excel_from_upload,
         markdown_to_html,
+        word_to_pdf_from_upload,
+        pdf_to_word_from_upload,
+        excel_to_pdf_from_upload,
         image_resize_base64,
         image_convert_base64,
         image_crop_base64,
@@ -51,4 +62,5 @@ def get_tools():
         image_add_text_watermark_upload,
         image_add_image_watermark_upload,
         image_remove_watermark_upload,
+        image_auto_remove_watermark_upload,
     ]

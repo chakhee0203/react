@@ -7,28 +7,53 @@ import urllib.parse
 import difflib
 import html
 from datetime import datetime
+import markdown
+try:
+    from src.tools.image import get_artifact as get_image_artifact
+except Exception:
+    def get_image_artifact(_):
+        return ""
+try:
+    from src.tools.office import get_artifact as get_file_artifact
+except Exception:
+    def get_file_artifact(_):
+        return ""
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, AIMessageChunk
 from src.agent.react_agent import get_graph
 
 def extract_image_base64(text):
     """Extract base64 image data from tool output."""
-    # Support both legacy [IMAGE_DATA: ...] and new [IMAGE:mime:...]
     match1 = re.search(r"\[IMAGE_DATA: (.+?)\]", text)
     if match1:
         return ("png", match1.group(1).strip())
     match2 = re.search(r"\[IMAGE:([a-zA-Z0-9]+):(.+?)\]", text)
     if match2:
         return (match2.group(1).lower(), match2.group(2).strip())
+    match3 = re.search(r"\[IMAGE_ID:([a-f0-9]+):([a-zA-Z0-9]+)\]", text)
+    if match3:
+        aid = match3.group(1)
+        mime = match3.group(2).lower()
+        b64 = get_image_artifact(aid)
+        if b64:
+            return (mime, b64)
     return None
 
 def extract_file_artifact(text):
-    """Extract downloadable file artifact from tool output: [FILE:ext:base64:filename]"""
+    """Extract downloadable file artifact from tool output."""
     match = re.search(r"\[FILE:([a-zA-Z0-9]+):(.+?):([^\]]+)\]", text)
     if match:
         ext = match.group(1).lower()
         b64 = match.group(2)
         fname = match.group(3)
         return (ext, b64, fname)
+    match2 = re.search(r"\[FILE_ID:([a-f0-9]+):([a-zA-Z0-9]+):([^\]]+)\]", text)
+    if match2:
+        aid = match2.group(1)
+        ext = match2.group(2).lower()
+        fname = match2.group(3)
+        b64 = get_file_artifact(aid)
+        if b64:
+            return (ext, b64, fname)
     return None
 
 
@@ -39,7 +64,7 @@ def render_ui():
 
     st.divider()
 
-    tabs = st.tabs(["JSON/SQL 工具", "Base64", "URL 编解码", "文本比对", "JSONPath 查询", "日期格式转换"])
+    tabs = st.tabs(["JSON/SQL 工具", "Base64", "URL 编解码", "文本比对", "JSONPath 查询", "Markdown 编辑"])
 
     with tabs[0]:
         if "jsonsql_output" not in st.session_state:
@@ -404,36 +429,25 @@ def render_ui():
             st.text_area("结果", height=240, key="jp_output")
 
     with tabs[5]:
-        if "date_output" not in st.session_state:
-            st.session_state.date_output = ""
+        if "md_input" not in st.session_state:
+            st.session_state.md_input = "# Markdown 编辑器\n\n- 支持基本Markdown语法\n- 左侧编辑，右侧预览\n\n```python\nprint('Hello Markdown')\n```"
+        if "md_html" not in st.session_state:
+            st.session_state.md_html = markdown.markdown(st.session_state.md_input)
         c1, c2, c3 = st.columns([4, 1, 4])
         with c1:
-            date_input = st.text_area("输入日期文本", height=200, key="date_input")
-            date_in_fmt = st.text_input("输入格式", value="%Y-%m-%d", key="date_in_fmt")
-            date_out_fmt = st.text_input("输出格式", value="%Y/%m/%d", key="date_out_fmt")
+            md_input = st.text_area("输入Markdown", height=300, key="md_input")
         with c2:
             st.write("")
             st.write("")
             st.write("")
-            if st.button("转换"):
-                try:
-                    lines = (date_input or "").splitlines()
-                    out_lines = []
-                    for line in lines:
-                        s = line.strip()
-                        if not s:
-                            continue
-                        try:
-                            dt = datetime.strptime(s, date_in_fmt)
-                            out_lines.append(dt.strftime(date_out_fmt))
-                        except Exception:
-                            out_lines.append(s)
-                    st.session_state.date_output = "\n".join(out_lines)
-                except Exception as e:
-                    st.session_state.date_output = f"Error: {str(e)}"
+            if st.button("预览"):
+                st.session_state.md_html = markdown.markdown(md_input)
                 st.rerun()
+            html_doc = f"<!doctype html><html><head><meta charset='utf-8'><title>Markdown Export</title></head><body>{markdown.markdown(md_input)}</body></html>"
+            st.download_button("导出 HTML", data=html_doc.encode("utf-8"), file_name="export.html", mime="text/html")
+            st.download_button("导出 Markdown", data=md_input.encode("utf-8"), file_name="export.md", mime="text/markdown")
         with c3:
-            st.text_area("结果", height=200, key="date_output")
+            st.markdown(st.session_state.md_html, unsafe_allow_html=True)
 
     # Sidebar for API Key configuration
     with st.sidebar:
@@ -450,9 +464,9 @@ def render_ui():
         st.divider()
         st.header("文件上传")
         uploaded_files = st.file_uploader(
-            "上传文件 (CSV/Excel/文本/图片)",
+            "上传文件 (CSV/Excel/文本/图片/Word/PDF)",
             accept_multiple_files=True,
-            type=["csv", "xlsx", "xls", "txt", "png", "jpg", "jpeg", "webp", "bmp", "gif"]
+            type=["csv", "xlsx", "xls", "txt", "png", "jpg", "jpeg", "webp", "bmp", "gif", "docx", "doc", "pdf"]
         )
         
         if uploaded_files:
@@ -530,7 +544,11 @@ def render_ui():
                 if files:
                     uploaded_context = f"\n\n[System Hint] Current uploaded files for this session: {', '.join(files)}. Only operate on these; do not read historical files."
                 
-                inputs = {"messages": [HumanMessage(content=user_input + uploaded_context)]}
+                max_len = 50000
+                u = user_input or ""
+                if len(u) > max_len:
+                    u = u[:max_len] + "\n\n[部分输入已截断以避免超出上下文限制]"
+                inputs = {"messages": [HumanMessage(content=u + uploaded_context)]}
                 
                 # Use stream_mode="updates" to get node-level updates (waiting effect between nodes)
                 # This avoids token-by-token streaming but allows showing progress
