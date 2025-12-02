@@ -9,6 +9,14 @@ import subprocess
 import shutil
 import zipfile
 import xml.etree.ElementTree as ET
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Configure fonts for Chinese support
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'SimSun', 'Arial', 'sans-serif']
+plt.rcParams['axes.unicode_minus'] = False
 
 def _allowed(filename: str) -> bool:
     allowed = os.environ.get("CURRENT_SESSION_UPLOADS", "")
@@ -48,6 +56,340 @@ def excel_to_csv_from_upload(filename: str, return_base64: bool = False) -> str:
     finally:
         try:
             os.remove(path)
+        except Exception:
+            pass
+
+def _load_table_from_upload(filename: str):
+    path = os.path.join("uploads", filename)
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in (".xlsx", ".xls"):
+        df = pd.read_excel(path)
+    elif ext == ".csv":
+        try:
+            df = pd.read_csv(path)
+        except UnicodeDecodeError:
+            df = pd.read_csv(path, encoding="gbk")
+    else:
+        raise RuntimeError("Unsupported file type. Please upload Excel or CSV.")
+    return df, path
+
+@tool
+def table_basic_profile_from_upload(filename: str) -> str:
+    """Generate a basic profile (dtypes, missing, unique, numeric stats) for an uploaded Excel/CSV."""
+    try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
+        df, path = _load_table_from_upload(filename)
+        
+        rows, cols = df.shape
+        dtypes = df.dtypes.astype(str).to_dict()
+        miss = df.isna().sum().to_dict()
+        uniq = {c: int(df[c].nunique()) for c in df.columns}
+        nums = df.select_dtypes(include=["number"])
+        desc = nums.describe().to_csv() if not nums.empty else "No numeric columns."
+        
+        out = []
+        out.append(f"Rows: {rows}, Cols: {cols}")
+        out.append("\nData Types:")
+        for k, v in dtypes.items():
+            out.append(f"- {k}: {v}")
+        out.append("\nMissing Values:")
+        for k, v in miss.items():
+            if v > 0:
+                out.append(f"- {k}: {v}")
+        if all(v == 0 for v in miss.values()):
+            out.append("No missing values.")
+            
+        out.append("\nUnique Values Count:")
+        for k, v in uniq.items():
+            out.append(f"- {k}: {v}")
+            
+        # Save numeric summary as artifact
+        aid = _put_artifact(base64.b64encode(desc.encode("utf-8")).decode("utf-8"))
+        name = os.path.splitext(filename)[0] + "_numeric_summary.csv"
+        
+        return "\n".join(out) + f"\n\n[FILE_ID:{aid}:csv:{name}]"
+    except Exception as e:
+        return f"Error profiling table: {str(e)}"
+    finally:
+        try:
+            os.remove(os.path.join("uploads", filename))
+        except Exception:
+            pass
+
+@tool
+def table_value_counts_from_upload(filename: str, column: str) -> str:
+    """Get value counts for a specific column in an uploaded Excel/CSV."""
+    try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
+        df, path = _load_table_from_upload(filename)
+        
+        if column not in df.columns:
+            return f"Error: Column '{column}' not found. Available columns: {list(df.columns)}"
+            
+        vc = df[column].value_counts().to_csv()
+        aid = _put_artifact(base64.b64encode(vc.encode("utf-8")).decode("utf-8"))
+        name = os.path.splitext(filename)[0] + f"_{column}_counts.csv"
+        
+        top_5 = df[column].value_counts().head(5).to_string()
+        return f"Top 5 values for '{column}':\n{top_5}\n\nFull counts available: [FILE_ID:{aid}:csv:{name}]"
+    except Exception as e:
+        return f"Error getting value counts: {str(e)}"
+    finally:
+        try:
+            os.remove(os.path.join("uploads", filename))
+        except Exception:
+            pass
+
+@tool
+def table_correlation_from_upload(filename: str) -> str:
+    """Calculate correlation matrix for numeric columns in an uploaded Excel/CSV."""
+    try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
+        df, path = _load_table_from_upload(filename)
+        
+        nums = df.select_dtypes(include=["number"])
+        if nums.empty:
+            return "Error: No numeric columns found for correlation analysis."
+            
+        corr = nums.corr()
+        csv_out = corr.to_csv()
+        aid = _put_artifact(base64.b64encode(csv_out.encode("utf-8")).decode("utf-8"))
+        name = os.path.splitext(filename)[0] + "_correlation.csv"
+        
+        return f"Correlation matrix calculated. [FILE_ID:{aid}:csv:{name}]"
+    except Exception as e:
+        return f"Error calculating correlation: {str(e)}"
+    finally:
+        try:
+            os.remove(os.path.join("uploads", filename))
+        except Exception:
+            pass
+
+@tool
+def table_filter_query_from_upload(filename: str, query: str) -> str:
+    """Filter rows in uploaded Excel/CSV using a pandas query string (e.g. 'age > 30')."""
+    try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
+        df, path = _load_table_from_upload(filename)
+        
+        try:
+            filtered = df.query(query)
+        except Exception as qe:
+            return f"Error executing query '{query}': {str(qe)}"
+            
+        csv_out = filtered.to_csv(index=False)
+        aid = _put_artifact(base64.b64encode(csv_out.encode("utf-8")).decode("utf-8"))
+        name = os.path.splitext(filename)[0] + "_filtered.csv"
+        
+        return f"Filtered {len(filtered)} rows (from {len(df)}). [FILE_ID:{aid}:csv:{name}]"
+    except Exception as e:
+        return f"Error filtering table: {str(e)}"
+    finally:
+        try:
+            os.remove(os.path.join("uploads", filename))
+        except Exception:
+            pass
+
+@tool
+def table_outliers_from_upload(filename: str, column: str) -> str:
+    """Detect outliers in a numeric column using IQR method (1.5 * IQR)."""
+    try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
+        df, path = _load_table_from_upload(filename)
+        
+        if column not in df.columns:
+            return f"Error: Column '{column}' not found."
+        if not pd.api.types.is_numeric_dtype(df[column]):
+            return f"Error: Column '{column}' is not numeric."
+            
+        Q1 = df[column].quantile(0.25)
+        Q3 = df[column].quantile(0.75)
+        IQR = Q3 - Q1
+        lower = Q1 - 1.5 * IQR
+        upper = Q3 + 1.5 * IQR
+        
+        outliers = df[(df[column] < lower) | (df[column] > upper)]
+        
+        csv_out = outliers.to_csv(index=False)
+        aid = _put_artifact(base64.b64encode(csv_out.encode("utf-8")).decode("utf-8"))
+        name = os.path.splitext(filename)[0] + f"_{column}_outliers.csv"
+        
+        return f"Found {len(outliers)} outliers in '{column}' (bounds: {lower:.2f}, {upper:.2f}). [FILE_ID:{aid}:csv:{name}]"
+    except Exception as e:
+        return f"Error detecting outliers: {str(e)}"
+    finally:
+        try:
+            os.remove(os.path.join("uploads", filename))
+        except Exception:
+            pass
+
+@tool
+def table_pivot_from_upload(filename: str, index: str, columns: str, values: str, aggfunc: str = "mean") -> str:
+    """Create a pivot table from uploaded Excel/CSV."""
+    try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
+        df, path = _load_table_from_upload(filename)
+        
+        pivot = df.pivot_table(index=index, columns=columns, values=values, aggfunc=aggfunc)
+        
+        csv_out = pivot.to_csv()
+        aid = _put_artifact(base64.b64encode(csv_out.encode("utf-8")).decode("utf-8"))
+        name = os.path.splitext(filename)[0] + "_pivot.csv"
+        
+        return f"Pivot table created. [FILE_ID:{aid}:csv:{name}]"
+    except Exception as e:
+        return f"Error creating pivot table: {str(e)}"
+    finally:
+        try:
+            os.remove(os.path.join("uploads", filename))
+        except Exception:
+            pass
+
+def _save_plot_to_artifact(filename_prefix: str, chart_type: str = "chart") -> str:
+    """Save current matplotlib figure to base64 artifact and return formatted string (display + download)."""
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+    aid = _put_artifact(b64)
+    
+    # Generate a safe filename for download
+    safe_name = os.path.splitext(filename_prefix)[0]
+    out_name = f"{safe_name}_{chart_type}.png"
+    
+    # Return raw base64 as requested by user
+    return f"[IMAGE:png:{b64}]\n\nDownload Chart: [FILE:png:{b64}:{out_name}]"
+
+@tool
+def table_chart_histogram_from_upload(filename: str, column: str, bins: int = 10) -> str:
+    """Generate a histogram for a numeric column in an uploaded Excel/CSV."""
+    try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
+        df, path = _load_table_from_upload(filename)
+        
+        if column not in df.columns:
+            return f"Error: Column '{column}' not found."
+        if not pd.api.types.is_numeric_dtype(df[column]):
+            return f"Error: Column '{column}' is not numeric."
+            
+        plt.figure(figsize=(10, 6))
+        sns.histplot(df[column], bins=bins, kde=True)
+        plt.title(f"Histogram of {column}")
+        plt.xlabel(column)
+        plt.ylabel("Frequency")
+        
+        return f"Histogram created. {_save_plot_to_artifact(filename, 'histogram')}"
+    except Exception as e:
+        return f"Error generating histogram: {str(e)}"
+    finally:
+        try:
+            os.remove(os.path.join("uploads", filename))
+        except Exception:
+            pass
+
+@tool
+def table_chart_scatter_from_upload(filename: str, x_column: str, y_column: str) -> str:
+    """Generate a scatter plot for two numeric columns in an uploaded Excel/CSV."""
+    try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
+        df, path = _load_table_from_upload(filename)
+        
+        for col in [x_column, y_column]:
+            if col not in df.columns:
+                return f"Error: Column '{col}' not found."
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                return f"Error: Column '{col}' is not numeric."
+                
+        plt.figure(figsize=(10, 6))
+        sns.scatterplot(data=df, x=x_column, y=y_column)
+        plt.title(f"Scatter Plot: {x_column} vs {y_column}")
+        
+        return f"Scatter plot created. {_save_plot_to_artifact(filename, 'scatter')}"
+    except Exception as e:
+        return f"Error generating scatter plot: {str(e)}"
+    finally:
+        try:
+            os.remove(os.path.join("uploads", filename))
+        except Exception:
+            pass
+
+@tool
+def table_chart_line_from_upload(filename: str, x_column: str, y_column: str) -> str:
+    """Generate a line chart (e.g. time series) for two columns in an uploaded Excel/CSV."""
+    try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
+        df, path = _load_table_from_upload(filename)
+        
+        if x_column not in df.columns or y_column not in df.columns:
+            return f"Error: Columns not found."
+            
+        # Try to parse x_column as datetime if it looks like time
+        try:
+            df[x_column] = pd.to_datetime(df[x_column])
+        except Exception:
+            pass
+            
+        plt.figure(figsize=(12, 6))
+        sns.lineplot(data=df, x=x_column, y=y_column)
+        plt.title(f"Line Chart: {y_column} over {x_column}")
+        plt.xticks(rotation=45)
+        
+        return f"Line chart created. {_save_plot_to_artifact(filename, 'line_chart')}"
+    except Exception as e:
+        return f"Error generating line chart: {str(e)}"
+    finally:
+        try:
+            os.remove(os.path.join("uploads", filename))
+        except Exception:
+            pass
+
+@tool
+def table_chart_bar_from_upload(filename: str, x_column: str, y_column: str, aggregation: str = "sum") -> str:
+    """Generate a bar chart for categorical x and numeric y in an uploaded Excel/CSV."""
+    try:
+        if not _allowed(filename):
+            return "Error: File not allowed (not in current session uploads)"
+        df, path = _load_table_from_upload(filename)
+        
+        if x_column not in df.columns or y_column not in df.columns:
+            return f"Error: Columns not found."
+        if not pd.api.types.is_numeric_dtype(df[y_column]):
+            return f"Error: Column '{y_column}' must be numeric."
+            
+        # Aggregate data
+        if aggregation == "sum":
+            data = df.groupby(x_column)[y_column].sum().reset_index()
+        elif aggregation == "mean":
+            data = df.groupby(x_column)[y_column].mean().reset_index()
+        elif aggregation == "count":
+            data = df.groupby(x_column)[y_column].count().reset_index()
+        else:
+            return "Error: Aggregation must be 'sum', 'mean', or 'count'."
+            
+        # Sort by value descending for better visualization
+        data = data.sort_values(y_column, ascending=False).head(20) # Limit to top 20
+        
+        plt.figure(figsize=(12, 6))
+        sns.barplot(data=data, x=x_column, y=y_column)
+        plt.title(f"Bar Chart: {y_column} by {x_column} ({aggregation})")
+        plt.xticks(rotation=45)
+        
+        return f"Bar chart created. {_save_plot_to_artifact(filename, 'bar_chart')}"
+    except Exception as e:
+        return f"Error generating bar chart: {str(e)}"
+    finally:
+        try:
+            os.remove(os.path.join("uploads", filename))
         except Exception:
             pass
 

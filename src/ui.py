@@ -36,6 +36,11 @@ def extract_image_base64(text):
         b64 = get_image_artifact(aid)
         if b64:
             return (mime, b64)
+        # Fallback: check office tools artifact cache
+        b64 = get_file_artifact(aid)
+        if b64:
+            return (mime, b64)
+    
     return None
 
 def extract_file_artifact(text):
