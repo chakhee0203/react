@@ -1,5 +1,5 @@
 from .general import web_search, calculator, current_time
-from .files import python_interpreter, list_uploaded_files
+from .files import python_interpreter, list_uploaded_files, read_file_from_upload
 from .dev import json_formatter, hash_generator, encoding_tool, timestamp_converter, qrcode_generator, sql_formatter
 from .office import (
     excel_to_csv_from_upload,
@@ -45,6 +45,7 @@ def get_tools():
         current_time, 
         python_interpreter, 
         list_uploaded_files,
+        read_file_from_upload,
         json_formatter,
         hash_generator,
         encoding_tool,
