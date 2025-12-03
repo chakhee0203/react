@@ -8,6 +8,8 @@ import difflib
 import html
 from datetime import datetime
 import markdown
+import shlex
+import requests
 try:
     from src.tools.image import get_artifact as get_image_artifact
 except Exception:
@@ -69,7 +71,7 @@ def render_ui():
 
     st.divider()
 
-    tabs = st.tabs(["JSON/SQL 工具", "Base64", "URL 编解码", "文本比对", "JSONPath 查询", "Markdown 编辑"])
+    tabs = st.tabs(["JSON/SQL 工具", "编解码工具", "文本比对", "JSONPath 查询", "Markdown 编辑", "模拟请求"])
 
     with tabs[0]:
         if "jsonsql_output" not in st.session_state:
@@ -107,58 +109,66 @@ def render_ui():
             st.text_area("结果", height=300, key="jsonsql_output")
 
     with tabs[1]:
-        if "b64_output" not in st.session_state:
-            st.session_state.b64_output = ""
+        if "codec_output" not in st.session_state:
+            st.session_state.codec_output = ""
+            
+        st.markdown("#### 编解码工具")
+        
+        codec_mode = st.radio("选择模式", ["Base64", "URL", "Hex", "HTML", "Unicode"], horizontal=True)
+        
         c1, c2, c3 = st.columns([4, 1, 4])
         with c1:
-            b64_input = st.text_area("输入文本", height=200, key="b64_input")
+            codec_input = st.text_area("输入文本", height=200, key="codec_input")
+            
         with c2:
             st.write("")
             st.write("")
-            st.write("")
-            if st.button("编码"):
+            if st.button("编码 / 加密"):
                 try:
-                    st.session_state.b64_output = base64.b64encode(b64_input.encode("utf-8")).decode("utf-8") if b64_input else ""
+                    txt = codec_input
+                    if codec_mode == "Base64":
+                        res = base64.b64encode(txt.encode("utf-8")).decode("utf-8")
+                    elif codec_mode == "URL":
+                        res = urllib.parse.quote(txt, safe="")
+                    elif codec_mode == "Hex":
+                        res = txt.encode("utf-8").hex()
+                    elif codec_mode == "HTML":
+                        res = html.escape(txt)
+                    elif codec_mode == "Unicode":
+                        res = txt.encode("unicode_escape").decode("utf-8")
+                    else:
+                        res = ""
+                    st.session_state.codec_output = res
                 except Exception as e:
-                    st.session_state.b64_output = f"Error: {str(e)}"
+                    st.session_state.codec_output = f"Error: {str(e)}"
                 st.rerun()
+                
             st.write("")
-            if st.button("解码"):
+            if st.button("解码 / 解密"):
                 try:
-                    st.session_state.b64_output = base64.b64decode(b64_input.encode("utf-8")).decode("utf-8") if b64_input else ""
+                    txt = codec_input
+                    if codec_mode == "Base64":
+                        res = base64.b64decode(txt.encode("utf-8")).decode("utf-8")
+                    elif codec_mode == "URL":
+                        res = urllib.parse.unquote(txt)
+                    elif codec_mode == "Hex":
+                        clean_txt = re.sub(r"\s+", "", txt)
+                        res = bytes.fromhex(clean_txt).decode("utf-8")
+                    elif codec_mode == "HTML":
+                        res = html.unescape(txt)
+                    elif codec_mode == "Unicode":
+                        res = txt.encode("utf-8").decode("unicode_escape")
+                    else:
+                        res = ""
+                    st.session_state.codec_output = res
                 except Exception as e:
-                    st.session_state.b64_output = f"Error: {str(e)}"
+                    st.session_state.codec_output = f"Error: {str(e)}"
                 st.rerun()
+
         with c3:
-            st.text_area("结果", height=200, key="b64_output")
+            st.text_area("结果", height=200, value=st.session_state.codec_output, key="codec_output_display")
 
     with tabs[2]:
-        if "url_output" not in st.session_state:
-            st.session_state.url_output = ""
-        c1, c2, c3 = st.columns([4, 1, 4])
-        with c1:
-            url_input = st.text_area("输入文本", height=200, key="url_input")
-        with c2:
-            st.write("")
-            st.write("")
-            st.write("")
-            if st.button("URL 编码"):
-                try:
-                    st.session_state.url_output = urllib.parse.quote(url_input, safe="") if url_input else ""
-                except Exception as e:
-                    st.session_state.url_output = f"Error: {str(e)}"
-                st.rerun()
-            st.write("")
-            if st.button("URL 解码"):
-                try:
-                    st.session_state.url_output = urllib.parse.unquote(url_input) if url_input else ""
-                except Exception as e:
-                    st.session_state.url_output = f"Error: {str(e)}"
-                st.rerun()
-        with c3:
-            st.text_area("结果", height=200, key="url_output")
-
-    with tabs[3]:
         def _normalize_lines(text, ignore_ws, ignore_case):
             lines = (text or "").splitlines()
             out = []
@@ -287,7 +297,7 @@ def render_ui():
             html_view = _render_hunk(a_lines, b_lines, ops[cur])
             st.markdown(html_view, unsafe_allow_html=True)
 
-    with tabs[4]:
+    with tabs[3]:
         if "jp_output" not in st.session_state:
             st.session_state.jp_output = ""
         def _jp_tokens(path: str):
@@ -433,7 +443,7 @@ def render_ui():
         with c3:
             st.text_area("结果", height=240, key="jp_output")
 
-    with tabs[5]:
+    with tabs[4]:
         if "md_input" not in st.session_state:
             st.session_state.md_input = "# Markdown 编辑器\n\n- 支持基本Markdown语法\n- 左侧编辑，右侧预览\n\n```python\nprint('Hello Markdown')\n```"
         if "md_html" not in st.session_state:
@@ -453,6 +463,139 @@ def render_ui():
             st.download_button("导出 Markdown", data=md_input.encode("utf-8"), file_name="export.md", mime="text/markdown")
         with c3:
             st.markdown(st.session_state.md_html, unsafe_allow_html=True)
+
+    with tabs[5]:
+        st.markdown("#### HTTP 模拟请求")
+        
+        if "req_url" not in st.session_state:
+            st.session_state.req_url = ""
+        if "req_method" not in st.session_state:
+            st.session_state.req_method = "GET"
+        if "req_headers" not in st.session_state:
+            st.session_state.req_headers = "{}"
+        if "req_body" not in st.session_state:
+            st.session_state.req_body = ""
+        if "req_response" not in st.session_state:
+            st.session_state.req_response = None
+
+        def _parse_curl_cmd(cmd):
+            if not cmd: return
+            try:
+                cmd = cmd.strip()
+                if cmd.startswith("curl "):
+                    cmd = cmd[5:]
+                
+                tokens = shlex.split(cmd)
+                
+                method = "GET"
+                url = ""
+                headers = {}
+                data = None
+                
+                i = 0
+                while i < len(tokens):
+                    token = tokens[i]
+                    if token in ("-X", "--request"):
+                        if i + 1 < len(tokens):
+                            method = tokens[i+1].upper()
+                            i += 2
+                        else: i += 1
+                    elif token in ("-H", "--header"):
+                        if i + 1 < len(tokens):
+                            h = tokens[i+1]
+                            if ":" in h:
+                                k, v = h.split(":", 1)
+                                headers[k.strip()] = v.strip()
+                            i += 2
+                        else: i += 1
+                    elif token in ("--cookie", "-b"):
+                        if i + 1 < len(tokens):
+                            cookie_val = tokens[i+1]
+                            # curl can pass filename or string. Here we assume string format "k=v; k2=v2"
+                            # We add it to Cookie header
+                            if "Cookie" in headers:
+                                headers["Cookie"] += "; " + cookie_val
+                            else:
+                                headers["Cookie"] = cookie_val
+                            i += 2
+                        else: i += 1
+                    elif token in ("-d", "--data", "--data-raw", "--data-binary"):
+                        if i + 1 < len(tokens):
+                            data = tokens[i+1]
+                            if method == "GET": method = "POST"
+                            i += 2
+                        else: i += 1
+                    elif token.startswith("http") or token.startswith("www"):
+                        url = token
+                        i += 1
+                    else:
+                        if not url and not token.startswith("-"):
+                            url = token
+                        i += 1
+                
+                st.session_state.req_method = method
+                st.session_state.req_url = url
+                st.session_state.req_headers = json.dumps(headers, indent=2, ensure_ascii=False)
+                st.session_state.req_body = data if data else ""
+                
+            except Exception as e:
+                st.error(f"解析 cURL 失败: {str(e)}")
+
+        curl_input = st.text_area("输入 cURL 命令或 URL", height=100, placeholder="curl -X POST https://api.example.com ...", key="curl_input")
+        if st.button("解析并填充"):
+            _parse_curl_cmd(curl_input)
+            st.rerun()
+            
+        st.divider()
+        
+        c1, c2 = st.columns([1, 4])
+        with c1:
+            new_method = st.selectbox("Method", ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"], 
+                                      index=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"].index(st.session_state.req_method) 
+                                      if st.session_state.req_method in ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"] else 0,
+                                      key="req_method_select")
+            st.session_state.req_method = new_method
+        with c2:
+            new_url = st.text_input("URL", value=st.session_state.req_url, key="req_url_input")
+            st.session_state.req_url = new_url
+            
+        c3, c4 = st.columns(2)
+        with c3:
+            new_headers = st.text_area("Headers (JSON)", value=st.session_state.req_headers, height=150, key="req_headers_input")
+            st.session_state.req_headers = new_headers
+        with c4:
+            new_body = st.text_area("Body", value=st.session_state.req_body, height=150, key="req_body_input")
+            st.session_state.req_body = new_body
+            
+        if st.button("发送请求", type="primary"):
+            try:
+                headers_dict = {}
+                if st.session_state.req_headers.strip():
+                    headers_dict = json.loads(st.session_state.req_headers)
+                
+                resp = requests.request(
+                    method=st.session_state.req_method,
+                    url=st.session_state.req_url,
+                    headers=headers_dict,
+                    data=st.session_state.req_body.encode('utf-8') if st.session_state.req_body else None,
+                    timeout=30
+                )
+                st.session_state.req_response = resp
+            except Exception as e:
+                st.error(f"请求失败: {str(e)}")
+                
+        if st.session_state.req_response:
+            resp = st.session_state.req_response
+            st.markdown(f"**Status:** `{resp.status_code} {resp.reason}`")
+            
+            r1, r2 = st.tabs(["Response Body", "Response Headers"])
+            with r1:
+                try:
+                    st.json(resp.json())
+                except:
+                    st.text(resp.text)
+            with r2:
+                st.json(dict(resp.headers))
 
     # Sidebar for API Key configuration
     with st.sidebar:
