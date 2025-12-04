@@ -20,3 +20,6 @@ python-docx
 reportlab
 pdf2docx
 PyPDF2
+docx2pdf
+pywin32
+pdfminer.six
