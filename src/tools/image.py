@@ -6,6 +6,7 @@ from langchain_core.tools import tool
 import os
 import re
 import uuid
+import subprocess
 
 def _decode_image(b64: str) -> Image.Image:
     return Image.open(io.BytesIO(base64.b64decode(b64)))
@@ -27,6 +28,7 @@ def _choose_font(font_path: str, font_size: int):
             return ImageFont.truetype(font_path, font_size)
         except Exception:
             pass
+            
     cands = [
         "C:/Windows/Fonts/msyh.ttc",
         "C:/Windows/Fonts/msyh.ttf",
@@ -39,7 +41,9 @@ def _choose_font(font_path: str, font_size: int):
         "/System/Library/Fonts/STHeiti Medium.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttf",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         "/usr/share/fonts/truetype/arphic/ukai.ttc",
         "/usr/share/fonts/truetype/arphic/uming.ttc",
         "arial.ttf",
@@ -53,6 +57,22 @@ def _choose_font(font_path: str, font_size: int):
                 return ImageFont.truetype(fp, font_size)
             except Exception:
                 pass
+                
+    # Try to find a Chinese font using fc-list (Linux/Streamlit Cloud)
+    try:
+        output = subprocess.check_output(['fc-list', ':lang=zh', 'file'], text=True)
+        for line in output.splitlines():
+            if line.strip():
+                # Output format is usually: /path/to/font: ...
+                path = line.split(":")[0].strip()
+                if os.path.exists(path):
+                    try:
+                        return ImageFont.truetype(path, font_size)
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+        
     return ImageFont.load_default()
 
 ARTIFACT_CACHE = {}

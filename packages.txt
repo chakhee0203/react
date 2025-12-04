@@ -2,3 +2,5 @@ libreoffice
 pandoc
 fontconfig
 fonts-liberation
+fonts-wqy-zenhei
+fonts-noto-cjk
