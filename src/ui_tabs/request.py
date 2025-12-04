@@ -48,8 +48,6 @@ def _parse_curl_cmd(cmd):
             elif token in ("--cookie", "-b"):
                 if i + 1 < len(tokens):
                     cookie_val = tokens[i+1]
-                    # curl can pass filename or string. Here we assume string format "k=v; k2=v2"
-                    # We add it to Cookie header
                     if "Cookie" in headers:
                         headers["Cookie"] += "; " + cookie_val
                     else:
@@ -63,8 +61,7 @@ def _parse_curl_cmd(cmd):
                     i += 2
                 else: i += 1
             elif token == "--compressed":
-                    # Ignored but supported to not break parsing
-                    i += 1
+                i += 1
             elif token.startswith("http") or token.startswith("www"):
                 url = token
                 i += 1
@@ -73,10 +70,11 @@ def _parse_curl_cmd(cmd):
                     url = token
                 i += 1
         
-        st.session_state.req_method = method
-        st.session_state.req_url = url
-        st.session_state.req_headers = json.dumps(headers, indent=2, ensure_ascii=False)
-        st.session_state.req_body = data if data else ""
+        # Directly update widget state keys
+        st.session_state["req_method_select"] = method
+        st.session_state["req_url_input"] = url
+        st.session_state["req_headers_input"] = json.dumps(headers, indent=2, ensure_ascii=False)
+        st.session_state["req_body_input"] = data if data else ""
         
     except Exception as e:
         st.error(f"解析 cURL 失败: {str(e)}")
@@ -84,14 +82,15 @@ def _parse_curl_cmd(cmd):
 def render_request_tab():
     st.markdown("#### HTTP 模拟请求")
     
-    if "req_url" not in st.session_state:
-        st.session_state.req_url = ""
-    if "req_method" not in st.session_state:
-        st.session_state.req_method = "GET"
-    if "req_headers" not in st.session_state:
-        st.session_state.req_headers = "{}"
-    if "req_body" not in st.session_state:
-        st.session_state.req_body = ""
+    # Initialize session state keys if they don't exist
+    if "req_url_input" not in st.session_state:
+        st.session_state.req_url_input = ""
+    if "req_method_select" not in st.session_state:
+        st.session_state.req_method_select = "GET"
+    if "req_headers_input" not in st.session_state:
+        st.session_state.req_headers_input = "{}"
+    if "req_body_input" not in st.session_state:
+        st.session_state.req_body_input = ""
     if "req_response" not in st.session_state:
         st.session_state.req_response = None
 
@@ -104,34 +103,32 @@ def render_request_tab():
     
     c1, c2 = st.columns([1, 4])
     with c1:
-        new_method = st.selectbox("Method", ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"], 
-                                    index=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"].index(st.session_state.req_method) 
-                                    if st.session_state.req_method in ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"] else 0,
-                                    key="req_method_select")
-        st.session_state.req_method = new_method
+        st.selectbox("Method", ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"], key="req_method_select")
     with c2:
-        new_url = st.text_input("URL", value=st.session_state.req_url, key="req_url_input")
-        st.session_state.req_url = new_url
+        st.text_input("URL", key="req_url_input")
         
     c3, c4 = st.columns(2)
     with c3:
-        new_headers = st.text_area("Headers (JSON)", value=st.session_state.req_headers, height=150, key="req_headers_input")
-        st.session_state.req_headers = new_headers
+        st.text_area("Headers (JSON)", height=150, key="req_headers_input")
     with c4:
-        new_body = st.text_area("Body", value=st.session_state.req_body, height=150, key="req_body_input")
-        st.session_state.req_body = new_body
+        st.text_area("Body", height=150, key="req_body_input")
         
     if st.button("发送请求", type="primary"):
         try:
+            method = st.session_state.req_method_select
+            url = st.session_state.req_url_input
+            headers_str = st.session_state.req_headers_input
+            body = st.session_state.req_body_input
+            
             headers_dict = {}
-            if st.session_state.req_headers.strip():
-                headers_dict = json.loads(st.session_state.req_headers)
+            if headers_str.strip():
+                headers_dict = json.loads(headers_str)
             
             resp = requests.request(
-                method=st.session_state.req_method,
-                url=st.session_state.req_url,
+                method=method,
+                url=url,
                 headers=headers_dict,
-                data=st.session_state.req_body.encode('utf-8') if st.session_state.req_body else None,
+                data=body.encode('utf-8') if body else None,
                 timeout=30
             )
             st.session_state.req_response = resp

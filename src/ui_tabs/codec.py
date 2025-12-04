@@ -5,8 +5,10 @@ import html
 import re
 
 def render_codec_tab():
-    if "codec_output" not in st.session_state:
-        st.session_state.codec_output = ""
+    if "codec_output_display" not in st.session_state:
+        st.session_state.codec_output_display = ""
+    if "codec_input" not in st.session_state:
+        st.session_state.codec_input = ""
         
     st.markdown("#### 编解码工具")
     
@@ -14,14 +16,14 @@ def render_codec_tab():
     
     c1, c2, c3 = st.columns([4, 1, 4])
     with c1:
-        codec_input = st.text_area("输入文本", height=200, key="codec_input")
+        st.text_area("输入文本", height=200, key="codec_input")
         
     with c2:
         st.write("")
         st.write("")
         if st.button("编码 / 加密"):
             try:
-                txt = codec_input
+                txt = st.session_state.codec_input
                 if codec_mode == "Base64":
                     res = base64.b64encode(txt.encode("utf-8")).decode("utf-8")
                 elif codec_mode == "URL":
@@ -34,15 +36,15 @@ def render_codec_tab():
                     res = txt.encode("unicode_escape").decode("utf-8")
                 else:
                     res = ""
-                st.session_state.codec_output = res
+                st.session_state["codec_output_display"] = res
             except Exception as e:
-                st.session_state.codec_output = f"Error: {str(e)}"
+                st.session_state["codec_output_display"] = f"Error: {str(e)}"
             st.rerun()
             
         st.write("")
         if st.button("解码 / 解密"):
             try:
-                txt = codec_input
+                txt = st.session_state.codec_input
                 if codec_mode == "Base64":
                     res = base64.b64decode(txt.encode("utf-8")).decode("utf-8")
                 elif codec_mode == "URL":
@@ -56,10 +58,10 @@ def render_codec_tab():
                     res = txt.encode("utf-8").decode("unicode_escape")
                 else:
                     res = ""
-                st.session_state.codec_output = res
+                st.session_state["codec_output_display"] = res
             except Exception as e:
-                st.session_state.codec_output = f"Error: {str(e)}"
+                st.session_state["codec_output_display"] = f"Error: {str(e)}"
             st.rerun()
 
     with c3:
-        st.text_area("结果", height=200, value=st.session_state.codec_output, key="codec_output_display")
+        st.text_area("结果", height=200, key="codec_output_display")
